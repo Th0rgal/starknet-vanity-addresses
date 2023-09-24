@@ -5,6 +5,7 @@ use std::fmt::Write;
 use std::str::FromStr;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 fn to_hex(felt: &FieldElement) -> String {
     let bytes = felt.to_bytes_be();
@@ -35,26 +36,55 @@ lazy_static! {
     static ref LEN  : FieldElement = FieldElement::from_str("5").unwrap();
 }
 
+fn derive_addr(i: u128) -> FieldElement {
+    pedersen_hash(
+        &pedersen_hash(
+            &pedersen_hash(
+                &pedersen_hash(&PRE_COMPUTE, &FieldElement::from(i)),
+                &CLASS_HASH,
+            ),
+            &CONSTRUCTOR_PARAMS_HASH,
+        ),
+        &LEN,
+    )
+}
+
 fn find_min(output: mpsc::Sender<(u128, FieldElement)>) {
     let mut min = INITIAL_MIN.clone();
     let mut rng = rand::thread_rng();
     loop {
         let i: u128 = rng.gen();
-        let output_addr = pedersen_hash(
-            &pedersen_hash(
-                &pedersen_hash(
-                    &pedersen_hash(&PRE_COMPUTE, &FieldElement::from(i)),
-                    &CLASS_HASH,
-                ),
-                &CONSTRUCTOR_PARAMS_HASH,
-            ),
-            &LEN,
-        );
+        let output_addr = derive_addr(i);
         if output_addr < min {
             min = output_addr;
             output.send((i, min.clone())).unwrap();
         }
     }
+}
+
+fn estimate_addresses_per_second(num_threads: usize) -> usize {
+    let duration = Duration::from_secs(1);
+    let (tx, rx) = mpsc::channel();
+
+    for _ in 0..num_threads {
+        let tx_clone = tx.clone();
+        thread::spawn(move || {
+            let start_time = Instant::now();
+            let mut count = 0;
+            while start_time.elapsed() < duration {
+                let _: u128 = rand::thread_rng().gen();
+                derive_addr(count);
+                count += 1;
+            }
+            tx_clone.send(count).unwrap();
+        });
+    }
+
+    drop(tx);
+
+    let results: Vec<u128> = rx.iter().collect();
+    let total: usize = results.iter().map(|&val| val as usize).sum();
+    total
 }
 
 fn main() {
@@ -69,6 +99,12 @@ fn main() {
         1
     };
     println!("will use {} threads", num_threads);
+
+    let estimated_addresses = estimate_addresses_per_second(num_threads);
+    println!(
+        "Estimated speed: {:.1}k/s",
+        estimated_addresses as f64 / 1000.0
+    );
 
     for _ in 0..num_threads {
         let tx_clone = tx.clone();
