@@ -94,7 +94,7 @@ fn main() {
 
     let available_threads = num_cpus::get();
     let num_threads = if available_threads > 1 {
-        available_threads - 1
+        available_threads
     } else {
         1
     };
